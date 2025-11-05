@@ -30,8 +30,10 @@ Quick Start
 1) Database
 - Create DB:
   - CREATE DATABASE doclocker_db;
-- (Optional) Run migration for admin/versioning schema:
-  - mysql -u root -p doclocker_db < backend/migrations/2025_11_04_admin.sql
+- Run migration for admin/versioning schema:
+  - mysql -u root -p doclocker_db < backup.sql
+- (Optional) To format database run:
+  - mysql -u root -p doclocker_db < refresh_db.sql
 
 2) Backend
 - cd backend
