@@ -617,3 +617,64 @@ def get_ai_profile(user_id: int):
         print(f"Traceback: {traceback.format_exc()}")
         return jsonify({'success': False, 'message': f'Failed to fetch profile: {str(e)}'}), 500
 
+
+@student_bp.route('/api/profile/<int:user_id>', methods=['PUT'])
+@login_required
+def update_ai_profile(user_id: int):
+    """Update the AI-generated profile JSON for a user."""
+    try:
+        requester_id = get_current_user_id()
+        requester_role = session.get('user_role')
+        
+        # Users can only update their own profile, admins can update any
+        if user_id != requester_id and requester_role != 'admin':
+            return jsonify({
+                'success': False,
+                'message': 'Unauthorized: You can only edit your own profile'
+            }), 403
+        
+        data = request.get_json()
+        if not data or 'profile_json' not in data:
+            return jsonify({
+                'success': False,
+                'message': 'Missing profile_json in request body'
+            }), 400
+        
+        profile_json = data['profile_json']
+        
+        # Validate that profile_json is a dict
+        if not isinstance(profile_json, dict):
+            return jsonify({
+                'success': False,
+                'message': 'profile_json must be a JSON object'
+            }), 400
+        
+        # Update or insert profile using raw SQL for compatibility
+        db.session.execute(
+            text("""
+                INSERT INTO user_profile (user_id, profile_json, last_updated)
+                VALUES (:uid, :pj, NOW())
+                ON DUPLICATE KEY UPDATE 
+                    profile_json = VALUES(profile_json),
+                    last_updated = NOW()
+            """),
+            { 'uid': user_id, 'pj': json.dumps(profile_json) }
+        )
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Profile updated successfully',
+            'data': {'profile': {'user_id': user_id, 'profile_json': profile_json}}
+        }), 200
+    
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        print(f"Error updating profile: {str(e)}")
+        print(f"Traceback: {traceback.format_exc()}")
+        return jsonify({
+            'success': False,
+            'message': f'Failed to update profile: {str(e)}'
+        }), 500
+

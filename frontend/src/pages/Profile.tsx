@@ -5,7 +5,9 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Lock, LogOut, Upload, FileText, Download, User } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Lock, LogOut, Upload, FileText, Download, User, Edit, Save, X, Plus, Trash2 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 // Removed mock data; fetch from backend only
 import { useToast } from '@/hooks/use-toast';
@@ -23,6 +25,9 @@ const Profile = () => {
   const [showProfileDialog, setShowProfileDialog] = useState(false);
   const [uploadingOverlay, setUploadingOverlay] = useState<{active: boolean; current: number; total: number}>({ active: false, current: 0, total: 0 });
   const [regenerating, setRegenerating] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedProfile, setEditedProfile] = useState<any>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -255,6 +260,83 @@ const Profile = () => {
     }
   }, [user?.id]);
 
+  const handleEditClick = () => {
+    if (aiProfile) {
+      setEditedProfile(JSON.parse(JSON.stringify(aiProfile))); // Deep copy
+      setIsEditing(true);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setIsEditing(false);
+    setEditedProfile(null);
+  };
+
+  const handleSaveProfile = async () => {
+    if (!user?.id || !editedProfile) return;
+    
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/profile/${user.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ profile_json: editedProfile }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      }
+
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        const text = await res.text();
+        throw new Error(`Unexpected response: ${text.slice(0, 120)}`);
+      }
+
+      const json = await res.json();
+      if (!json.success) throw new Error(json.message || 'Save failed');
+
+      setAiProfile(editedProfile);
+      setIsEditing(false);
+      setEditedProfile(null);
+      toast({ title: 'Profile saved successfully' });
+    } catch (e: any) {
+      toast({
+        title: 'Failed to save profile',
+        description: e?.message || 'Please try again',
+        variant: 'destructive',
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const updateProfileField = (field: string, value: any) => {
+    if (!editedProfile) return;
+    setEditedProfile({ ...editedProfile, [field]: value });
+  };
+
+  const addArrayItem = (field: string) => {
+    if (!editedProfile) return;
+    const current = Array.isArray(editedProfile[field]) ? editedProfile[field] : [];
+    setEditedProfile({ ...editedProfile, [field]: [...current, ''] });
+  };
+
+  const updateArrayItem = (field: string, index: number, value: string) => {
+    if (!editedProfile) return;
+    const current = Array.isArray(editedProfile[field]) ? [...editedProfile[field]] : [];
+    current[index] = value;
+    setEditedProfile({ ...editedProfile, [field]: current });
+  };
+
+  const removeArrayItem = (field: string, index: number) => {
+    if (!editedProfile) return;
+    const current = Array.isArray(editedProfile[field]) ? [...editedProfile[field]] : [];
+    current.splice(index, 1);
+    setEditedProfile({ ...editedProfile, [field]: current });
+  };
+
   if (!user) return null;
 
   return (
@@ -315,7 +397,13 @@ const Profile = () => {
         </motion.div>
 
         {/* AI Profile Dialog */}
-        <Dialog open={showProfileDialog} onOpenChange={setShowProfileDialog}>
+        <Dialog open={showProfileDialog} onOpenChange={(open) => {
+          setShowProfileDialog(open);
+          if (!open) {
+            setIsEditing(false);
+            setEditedProfile(null);
+          }
+        }}>
           <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="text-2xl font-bold flex items-center gap-2">
@@ -326,30 +414,64 @@ const Profile = () => {
                 Your one-page professional profile generated from uploaded documents
               </DialogDescription>
             </DialogHeader>
-            <div className="mb-4 flex gap-2">
-              <Button
-                variant="outline"
-                disabled={loadingProfile}
-                onClick={async () => {
-                  try {
-                    setRegenerating(true);
-                    setLoadingProfile(true);
-                    const res = await fetch('/api/profile/regenerate', { method: 'POST', credentials: 'include' });
-                    const json = await res.json();
-                    if (!res.ok || !json.success) throw new Error(json.message || 'Failed to regenerate');
-                    const p = json.data?.profile?.profile_json;
-                    if (p) setAiProfile(p);
-                    toast({ title: 'Profile regenerated' });
-                  } catch (e:any) {
-                    toast({ title: 'Regenerate failed', description: e?.message || 'Try again later', variant: 'destructive' });
-                  } finally {
-                    setRegenerating(false);
-                    setLoadingProfile(false);
-                  }
-                }}
-              >
-                {regenerating ? 'Regenerating...' : 'Regenerate Profile'}
-              </Button>
+            <div className="mb-4 flex gap-2 justify-between">
+              <div className="flex gap-2">
+                {!isEditing && (
+                  <>
+                    <Button
+                      variant="outline"
+                      disabled={loadingProfile || !aiProfile}
+                      onClick={handleEditClick}
+                    >
+                      <Edit className="w-4 h-4 mr-2" />
+                      Edit Profile
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={loadingProfile || regenerating}
+                      onClick={async () => {
+                        try {
+                          setRegenerating(true);
+                          setLoadingProfile(true);
+                          const res = await fetch('/api/profile/regenerate', { method: 'POST', credentials: 'include' });
+                          const json = await res.json();
+                          if (!res.ok || !json.success) throw new Error(json.message || 'Failed to regenerate');
+                          const p = json.data?.profile?.profile_json;
+                          if (p) setAiProfile(p);
+                          toast({ title: 'Profile regenerated' });
+                        } catch (e:any) {
+                          toast({ title: 'Regenerate failed', description: e?.message || 'Try again later', variant: 'destructive' });
+                        } finally {
+                          setRegenerating(false);
+                          setLoadingProfile(false);
+                        }
+                      }}
+                    >
+                      {regenerating ? 'Regenerating...' : 'Regenerate Profile'}
+                    </Button>
+                  </>
+                )}
+                {isEditing && (
+                  <>
+                    <Button
+                      variant="default"
+                      disabled={saving}
+                      onClick={handleSaveProfile}
+                    >
+                      <Save className="w-4 h-4 mr-2" />
+                      {saving ? 'Saving...' : 'Save Changes'}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={saving}
+                      onClick={handleCancelEdit}
+                    >
+                      <X className="w-4 h-4 mr-2" />
+                      Cancel
+                    </Button>
+                  </>
+                )}
+              </div>
             </div>
             
             {loadingProfile && (
@@ -379,7 +501,169 @@ const Profile = () => {
               </div>
             )}
 
-            {!loadingProfile && aiProfile && Object.keys(aiProfile).length > 0 ? (
+            {!loadingProfile && (isEditing && editedProfile ? (
+              <div className="space-y-6 mt-4">
+                {/* Name */}
+                <div>
+                  <label className="block text-sm font-semibold text-muted-foreground mb-2">Name</label>
+                  <Input
+                    value={editedProfile.name || ''}
+                    onChange={(e) => updateProfileField('name', e.target.value)}
+                    placeholder="Your name"
+                  />
+                </div>
+                
+                {/* Email */}
+                <div>
+                  <label className="block text-sm font-semibold text-muted-foreground mb-2">Email</label>
+                  <Input
+                    type="email"
+                    value={editedProfile.email || ''}
+                    onChange={(e) => updateProfileField('email', e.target.value)}
+                    placeholder="your.email@example.com"
+                  />
+                </div>
+                
+                {/* Summary */}
+                <div>
+                  <label className="block text-sm font-semibold text-muted-foreground mb-2">Summary</label>
+                  <Textarea
+                    value={editedProfile.summary || ''}
+                    onChange={(e) => updateProfileField('summary', e.target.value)}
+                    placeholder="Professional summary"
+                    rows={4}
+                  />
+                </div>
+                
+                {/* Education */}
+                <div>
+                  <label className="block text-sm font-semibold text-muted-foreground mb-2">Education</label>
+                  <Input
+                    value={editedProfile.education || ''}
+                    onChange={(e) => updateProfileField('education', e.target.value)}
+                    placeholder="Your educational background"
+                  />
+                </div>
+                
+                {/* Skills */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-sm font-semibold text-muted-foreground">Skills</label>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => addArrayItem('skills')}
+                    >
+                      <Plus className="w-3 h-3 mr-1" />
+                      Add
+                    </Button>
+                  </div>
+                  <div className="space-y-2">
+                    {Array.isArray(editedProfile.skills) && editedProfile.skills.length > 0 ? (
+                      editedProfile.skills.map((skill: string, idx: number) => (
+                        <div key={idx} className="flex gap-2">
+                          <Input
+                            value={skill}
+                            onChange={(e) => updateArrayItem('skills', idx, e.target.value)}
+                            placeholder={`Skill ${idx + 1}`}
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => removeArrayItem('skills', idx)}
+                          >
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No skills added. Click "Add" to add one.</p>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Certifications */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-sm font-semibold text-muted-foreground">Certifications</label>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => addArrayItem('certifications')}
+                    >
+                      <Plus className="w-3 h-3 mr-1" />
+                      Add
+                    </Button>
+                  </div>
+                  <div className="space-y-2">
+                    {Array.isArray(editedProfile.certifications) && editedProfile.certifications.length > 0 ? (
+                      editedProfile.certifications.map((cert: string, idx: number) => (
+                        <div key={idx} className="flex gap-2">
+                          <Input
+                            value={cert}
+                            onChange={(e) => updateArrayItem('certifications', idx, e.target.value)}
+                            placeholder={`Certification ${idx + 1}`}
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => removeArrayItem('certifications', idx)}
+                          >
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No certifications added. Click "Add" to add one.</p>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Achievements */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-sm font-semibold text-muted-foreground">Achievements</label>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => addArrayItem('achievements')}
+                    >
+                      <Plus className="w-3 h-3 mr-1" />
+                      Add
+                    </Button>
+                  </div>
+                  <div className="space-y-2">
+                    {Array.isArray(editedProfile.achievements) && editedProfile.achievements.length > 0 ? (
+                      editedProfile.achievements.map((achievement: string, idx: number) => (
+                        <div key={idx} className="flex gap-2">
+                          <Textarea
+                            value={achievement}
+                            onChange={(e) => updateArrayItem('achievements', idx, e.target.value)}
+                            placeholder={`Achievement ${idx + 1}`}
+                            rows={2}
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => removeArrayItem('achievements', idx)}
+                          >
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No achievements added. Click "Add" to add one.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : aiProfile && Object.keys(aiProfile).length > 0 ? (
               <div className="space-y-6 mt-4">
                 {/* Name */}
                 {aiProfile.name && (
@@ -458,7 +742,7 @@ const Profile = () => {
                   </div>
                 )}
               </div>
-            ) : (!loadingProfile && (
+            ) : (
               <div className="text-center py-8">
                 <User className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
                 <h3 className="text-lg font-semibold mb-2">No Profile Generated Yet</h3>
