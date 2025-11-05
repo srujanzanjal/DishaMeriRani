@@ -1,5 +1,5 @@
 """
-Authentication routes for user signup, login, and logout.
+Authentication routes for user signup, login, and logout using JWT.
 """
 from flask import Blueprint, request, jsonify, session
 from models import db, User

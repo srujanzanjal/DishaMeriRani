@@ -27,20 +27,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         const response = await fetch('/api/verify', {
           method: 'GET',
-          credentials: 'include', // Include cookies for session
+          credentials: 'include',
         });
 
-        if (response.ok) {
-          const result = await response.json();
-          if (result.success && result.data?.user) {
-            setUser(result.data.user);
-            localStorage.setItem('docLocker_user', JSON.stringify(result.data.user));
-          } else {
-            // Not logged in
-            localStorage.removeItem('docLocker_user');
-          }
+        if (!response.ok) {
+          localStorage.removeItem('docLocker_user');
+          return;
+        }
+
+        // Guard JSON parsing
+        let result: any = null;
+        try {
+          result = await response.json();
+        } catch (e) {
+          console.error('Failed to parse /api/verify JSON:', e);
+          localStorage.removeItem('docLocker_user');
+          return;
+        }
+
+        if (result?.success && result.data?.user) {
+          setUser(result.data.user);
+          localStorage.setItem('docLocker_user', JSON.stringify(result.data.user));
         } else {
-          // Session verification failed
           localStorage.removeItem('docLocker_user');
         }
       } catch (error) {
@@ -65,9 +73,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         body: JSON.stringify({ email, password }),
       });
 
-      const result = await response.json();
+      if (!response.ok) {
+        // Try to extract JSON error, else generic
+        let msg = 'Login failed';
+        try {
+          const err = await response.json();
+          msg = err?.message || msg;
+        } catch {}
+        throw new Error(msg);
+      }
 
-      if (response.ok && result.success && result.data) {
+      let result: any = null;
+      try {
+        result = await response.json();
+      } catch (e) {
+        throw new Error('Login response was not valid JSON. Is the backend running?');
+      }
+
+      if (result.success && result.data) {
         // Store user data (session is handled by cookies)
         const userData: User = {
           id: result.data.user.id,
@@ -99,9 +122,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         body: JSON.stringify({ name, email, password }),
       });
 
-      const result = await response.json();
+      if (!response.ok) {
+        let msg = 'Signup failed';
+        try {
+          const err = await response.json();
+          msg = err?.message || msg;
+        } catch {}
+        throw new Error(msg);
+      }
 
-      if (response.ok && result.success && result.data) {
+      let result: any = null;
+      try {
+        result = await response.json();
+      } catch (e) {
+        throw new Error('Signup response was not valid JSON. Is the backend running?');
+      }
+
+      if (result.success && result.data) {
         // Store user data (session is handled by cookies)
         const userData: User = {
           id: result.data.user.id,

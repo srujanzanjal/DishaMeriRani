@@ -11,6 +11,7 @@ import Profile from "./pages/Profile";
 import AdminLogin from "./pages/AdminLogin";
 import AdminDashboard from "./pages/AdminDashboard";
 import StudentDetail from "./pages/StudentDetail";
+import AdminUserDetail from "./pages/AdminUserDetail";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -30,6 +31,7 @@ const App = () => (
             <Route path="/admin" element={<AdminLogin />} />
             <Route path="/admin/dashboard" element={<AdminDashboard />} />
             <Route path="/admin/student/:id" element={<StudentDetail />} />
+            <Route path="/admin/users/:id" element={<AdminUserDetail />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

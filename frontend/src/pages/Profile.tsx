@@ -3,6 +3,8 @@ import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Lock, LogOut, Upload, FileText, Download, User } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 // Removed mock data; fetch from backend only
@@ -18,6 +20,9 @@ const Profile = () => {
   const [loadingProfile, setLoadingProfile] = useState(false);
   const [aiProfile, setAiProfile] = useState<any>(null);
   const [loadingDocs, setLoadingDocs] = useState(false);
+  const [showProfileDialog, setShowProfileDialog] = useState(false);
+  const [uploadingOverlay, setUploadingOverlay] = useState<{active: boolean; current: number; total: number}>({ active: false, current: 0, total: 0 });
+  const [regenerating, setRegenerating] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -41,41 +46,53 @@ const Profile = () => {
     let errorCount = 0;
 
     try {
-      // Upload each file one by one
-      for (const file of files) {
+      // Create a single axios instance with default config
+      const axios = (await import('axios')).default;
+      
+      // First, verify the session is still valid
+      try {
+        await axios.get('/api/verify', { withCredentials: true });
+      } catch (authError) {
+        console.error('Session verification failed:', authError);
+        toast({
+          title: 'Session Expired',
+          description: 'Please log in again to continue',
+          variant: 'destructive',
+        });
+        // Optionally redirect to login
+        // navigate('/login');
+        return;
+      }
+
+      // Upload each file one by one using the same axios instance
+      setUploadingOverlay({ active: true, current: 0, total: files.length });
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setUploadingOverlay({ active: true, current: i + 1, total: files.length });
         try {
           const formData = new FormData();
           formData.append('document', file);
 
-          const response = await fetch('/api/upload', {
-            method: 'POST',
-            credentials: 'include', // Include cookies for session
-            // Don't set Content-Type - let browser set it with boundary for FormData
-            body: formData,
+          const response = await axios.post('/api/upload', formData, {
+            withCredentials: true, // Include cookies for session
+            headers: {
+              'Content-Type': 'multipart/form-data',
+            },
+            // Add timeout and other axios config as needed
+            timeout: 30000, // 30 seconds timeout
+            onUploadProgress: (evt) => {
+              // optional: could wire a progress bar; overlay shows which file is uploading
+            }
           });
 
-          // Check if response is unauthorized (401) - not logged in
-          if (response.status === 401) {
-            localStorage.removeItem('docLocker_user');
-            throw new Error('Please login again.');
-          }
-
-          let result;
-          try {
-            result = await response.json();
-          } catch (jsonError) {
-            // If response is not JSON, get text
-            const text = await response.text();
-            throw new Error(`Server error: ${text || response.statusText}`);
-          }
-
-          if (response.ok && result.success) {
+          if (response.data?.success) {
             successCount++;
+            // Refresh documents after successful upload
+            await fetchDocuments();
           } else {
             errorCount++;
-            const errorMsg = result.message || result.error || 'Upload failed';
+            const errorMsg = response.data?.message || 'Upload failed';
             console.error('Upload failed for', file.name, errorMsg);
-            // Show individual file error
             toast({
               title: 'Upload Failed',
               description: `${file.name}: ${errorMsg}`,
@@ -84,7 +101,20 @@ const Profile = () => {
           }
         } catch (err: any) {
           errorCount++;
-          const errorMsg = err?.message || 'Network error during upload';
+          
+          // Check if unauthorized
+          if (err.response?.status === 401) {
+            localStorage.removeItem('docLocker_user');
+            toast({
+              title: 'Session Expired',
+              description: 'Please login again.',
+              variant: 'destructive',
+            });
+            navigate('/login');
+            return;
+          }
+
+          const errorMsg = err.response?.data?.message || err.message || 'Network error during upload';
           console.error('Error uploading', file.name, err);
           toast({
             title: 'Upload Error',
@@ -97,7 +127,7 @@ const Profile = () => {
       // Refresh documents and profile after uploads
       await fetchDocuments();
       if (user?.id) {
-        await fetchAiProfile(user.id);
+        await fetchAiProfile(user.id, false); // Don't show dialog automatically after upload
       }
 
       // Show final summary toast only if some files succeeded
@@ -123,6 +153,8 @@ const Profile = () => {
         description: 'Failed to upload files. Please check your connection.',
         variant: 'destructive',
       });
+    } finally {
+      setUploadingOverlay({ active: false, current: 0, total: 0 });
     }
   };
 
@@ -140,16 +172,77 @@ const Profile = () => {
     }
   };
 
-  const fetchAiProfile = async (userId: number | string) => {
+  const fetchAiProfile = async (userId: number | string, showDialog: boolean = false) => {
     try {
       setLoadingProfile(true);
       const res = await fetch(`/api/profile/${userId}`, {
         credentials: 'include', // Include cookies for session
       });
+      
+      if (!res.ok) {
+        throw new Error(`Failed to fetch profile: ${res.status}`);
+      }
+      
       const json = await res.json();
-      setAiProfile(json?.data?.profile?.profile_json || null);
-    } catch (e) {
-      // ignore
+      
+      if (json.success) {
+        const profile = json.data?.profile;
+        
+        // Normalize profile_json: backend may return stringified JSON
+        let normalized: any = null;
+        if (profile && profile.profile_json) {
+          if (typeof profile.profile_json === 'string') {
+            try {
+              normalized = JSON.parse(profile.profile_json);
+            } catch {
+              // fallback: leave as string
+              normalized = profile.profile_json;
+            }
+          } else {
+            normalized = profile.profile_json;
+          }
+        }
+
+        if (normalized && typeof normalized === 'object' && Object.keys(normalized).length > 0) {
+          setAiProfile(normalized);
+          
+          if (showDialog) {
+            setShowProfileDialog(true);
+          }
+        } else {
+          // No profile or empty profile
+          setAiProfile(null);
+          
+          if (showDialog) {
+            setShowProfileDialog(true); // Still show dialog but with empty state
+            const message = json.message || 'Upload documents with readable text to generate your AI profile';
+            toast({
+              title: 'No Profile Generated',
+              description: message,
+              variant: 'default',
+            });
+          }
+        }
+      } else {
+        setAiProfile(null);
+        if (showDialog) {
+          toast({
+            title: 'Error',
+            description: json.message || 'Failed to load profile',
+            variant: 'destructive',
+          });
+        }
+      }
+    } catch (e: any) {
+      console.error('Error fetching AI profile:', e);
+      if (showDialog) {
+        toast({
+          title: 'Error Loading Profile',
+          description: e?.message || 'Failed to load AI profile. Please try again.',
+          variant: 'destructive',
+        });
+      }
+      setAiProfile(null);
     } finally {
       setLoadingProfile(false);
     }
@@ -206,63 +299,180 @@ const Profile = () => {
               </div>
               <Button
                 variant="outline"
-                onClick={() => user?.id && fetchAiProfile(user.id)}
+                onClick={() => {
+                  if (!user?.id) return;
+                  setShowProfileDialog(true); // open immediately
+                  fetchAiProfile(user.id, true);
+                }}
+                disabled={loadingProfile}
                 className="border-primary/30 hover:border-primary"
               >
                 <User className="w-4 h-4 mr-2" />
                 {loadingProfile ? 'Loading Profile...' : 'View AI Profile'}
               </Button>
             </div>
-            {aiProfile && (
-              <div className="mt-6 rounded-lg p-4 border border-primary/20">
-                <h2 className="text-xl font-semibold mb-2">AI Profile</h2>
-                {aiProfile.summary && <p className="mb-4 text-sm text-muted-foreground">{aiProfile.summary}</p>}
+          </Card>
+        </motion.div>
+
+        {/* AI Profile Dialog */}
+        <Dialog open={showProfileDialog} onOpenChange={setShowProfileDialog}>
+          <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="text-2xl font-bold flex items-center gap-2">
+                <User className="w-6 h-6 text-primary" />
+                AI Generated Profile
+              </DialogTitle>
+              <DialogDescription>
+                Your one-page professional profile generated from uploaded documents
+              </DialogDescription>
+            </DialogHeader>
+            <div className="mb-4 flex gap-2">
+              <Button
+                variant="outline"
+                disabled={loadingProfile}
+                onClick={async () => {
+                  try {
+                    setRegenerating(true);
+                    setLoadingProfile(true);
+                    const res = await fetch('/api/profile/regenerate', { method: 'POST', credentials: 'include' });
+                    const json = await res.json();
+                    if (!res.ok || !json.success) throw new Error(json.message || 'Failed to regenerate');
+                    const p = json.data?.profile?.profile_json;
+                    if (p) setAiProfile(p);
+                    toast({ title: 'Profile regenerated' });
+                  } catch (e:any) {
+                    toast({ title: 'Regenerate failed', description: e?.message || 'Try again later', variant: 'destructive' });
+                  } finally {
+                    setRegenerating(false);
+                    setLoadingProfile(false);
+                  }
+                }}
+              >
+                {regenerating ? 'Regenerating...' : 'Regenerate Profile'}
+              </Button>
+            </div>
+            
+            {loadingProfile && (
+              <div className="space-y-6 mt-4">
+                <Skeleton className="h-8 w-2/3" />
+                <div className="p-4 rounded-lg bg-muted/50">
+                  <Skeleton className="h-16 w-full" />
+                </div>
                 <div className="grid md:grid-cols-2 gap-4">
-                  <div>
-                    <h3 className="font-medium">Education</h3>
-                    <p className="text-sm text-muted-foreground">{aiProfile.education || '—'}</p>
+                  <div className="space-y-2">
+                    <Skeleton className="h-4 w-24" />
+                    <Skeleton className="h-5 w-48" />
                   </div>
-                  <div>
-                    <h3 className="font-medium">Email</h3>
-                    <p className="text-sm text-muted-foreground">{aiProfile.email || user.email}</p>
+                  <div className="space-y-2">
+                    <Skeleton className="h-4 w-24" />
+                    <Skeleton className="h-5 w-64" />
                   </div>
                 </div>
+                <div>
+                  <Skeleton className="h-6 w-32 mb-3" />
+                  <div className="flex flex-wrap gap-2">
+                    <Skeleton className="h-8 w-20 rounded-full" />
+                    <Skeleton className="h-8 w-24 rounded-full" />
+                    <Skeleton className="h-8 w-16 rounded-full" />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!loadingProfile && aiProfile && Object.keys(aiProfile).length > 0 ? (
+              <div className="space-y-6 mt-4">
+                {/* Name */}
+                {aiProfile.name && (
+                  <div>
+                    <h2 className="text-3xl font-bold mb-2">{aiProfile.name}</h2>
+                  </div>
+                )}
+                
+                {/* Summary */}
+                {aiProfile.summary && (
+                  <div className="p-4 rounded-lg bg-muted/50">
+                    <p className="text-base leading-relaxed">{aiProfile.summary}</p>
+                  </div>
+                )}
+                
+                {/* Contact Info */}
+                <div className="grid md:grid-cols-2 gap-4">
+                  {aiProfile.email && (
+                    <div>
+                      <h3 className="font-semibold text-sm text-muted-foreground mb-1">Email</h3>
+                      <p className="text-base">{aiProfile.email}</p>
+                    </div>
+                  )}
+                  {aiProfile.education && (
+                    <div>
+                      <h3 className="font-semibold text-sm text-muted-foreground mb-1">Education</h3>
+                      <p className="text-base">{aiProfile.education}</p>
+                    </div>
+                  )}
+                </div>
+                
+                {/* Skills */}
                 {Array.isArray(aiProfile.skills) && aiProfile.skills.length > 0 && (
-                  <div className="mt-4">
-                    <h3 className="font-medium">Skills</h3>
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {aiProfile.skills.map((s: string) => (
-                        <span key={s} className="bg-primary/10 text-primary px-3 py-1 rounded-full text-xs">
+                  <div>
+                    <h3 className="font-semibold text-lg mb-3">Skills</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {aiProfile.skills.map((s: string, idx: number) => (
+                        <span 
+                          key={idx} 
+                          className="bg-primary/10 text-primary px-4 py-2 rounded-full text-sm font-medium"
+                        >
                           {s}
                         </span>
                       ))}
                     </div>
                   </div>
                 )}
+                
+                {/* Certifications */}
                 {Array.isArray(aiProfile.certifications) && aiProfile.certifications.length > 0 && (
-                  <div className="mt-4">
-                    <h3 className="font-medium">Certifications</h3>
-                    <ul className="list-disc ml-5 text-sm text-muted-foreground">
-                      {aiProfile.certifications.map((c: string) => (
-                        <li key={c}>{c}</li>
+                  <div>
+                    <h3 className="font-semibold text-lg mb-3">Certifications</h3>
+                    <ul className="space-y-2">
+                      {aiProfile.certifications.map((c: string, idx: number) => (
+                        <li key={idx} className="flex items-start gap-2">
+                          <span className="text-primary mt-1">•</span>
+                          <span className="text-base">{c}</span>
+                        </li>
                       ))}
                     </ul>
                   </div>
                 )}
+                
+                {/* Achievements */}
                 {Array.isArray(aiProfile.achievements) && aiProfile.achievements.length > 0 && (
-                  <div className="mt-4">
-                    <h3 className="font-medium">Achievements</h3>
-                    <ul className="list-disc ml-5 text-sm text-muted-foreground">
-                      {aiProfile.achievements.map((a: string) => (
-                        <li key={a}>{a}</li>
+                  <div>
+                    <h3 className="font-semibold text-lg mb-3">Achievements</h3>
+                    <ul className="space-y-2">
+                      {aiProfile.achievements.map((a: string, idx: number) => (
+                        <li key={idx} className="flex items-start gap-2">
+                          <span className="text-primary mt-1">•</span>
+                          <span className="text-base">{a}</span>
+                        </li>
                       ))}
                     </ul>
                   </div>
                 )}
               </div>
-            )}
-          </Card>
-        </motion.div>
+            ) : (!loadingProfile && (
+              <div className="text-center py-8">
+                <User className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
+                <h3 className="text-lg font-semibold mb-2">No Profile Generated Yet</h3>
+                <p className="text-muted-foreground mb-4">
+                  Upload documents to generate your AI profile. The profile will be automatically created from your uploaded files.
+                </p>
+                <Button onClick={() => setShowUpload(true)} className="bg-primary hover:bg-primary/90">
+                  <Upload className="w-4 h-4 mr-2" />
+                  Upload Documents
+                </Button>
+              </div>
+            ))}
+          </DialogContent>
+        </Dialog>
 
         {/* Upload Section */}
         <motion.div
@@ -294,6 +504,14 @@ const Profile = () => {
         </motion.div>
 
         {/* Documents Grid */}
+      {uploadingOverlay.active && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center">
+          <Card className="p-6 bg-card border-border">
+            <p className="text-sm text-muted-foreground mb-2">Uploading files...</p>
+            <p className="text-lg font-semibold">{uploadingOverlay.current} / {uploadingOverlay.total}</p>
+          </Card>
+        </div>
+      )}
         {loadingDocs && (
           <Card className="p-12 text-center bg-card border-border">
             <p className="text-muted-foreground">Loading documents...</p>
@@ -332,6 +550,28 @@ const Profile = () => {
                   <Button size="sm" variant="outline" onClick={() => window.open(`/api/document/${doc.id}/download`, '_blank')}>
                     <Download className="w-4 h-4" />
                   </Button>
+                  <Button size="sm" variant="destructive" onClick={async () => {
+                    try {
+                      const res = await fetch(`/api/document/${doc.id}`, { method: 'DELETE', credentials: 'include' });
+                      if (!res.ok) {
+                        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+                      }
+                      const contentType = res.headers.get('content-type');
+                      if (!contentType || !contentType.includes('application/json')) {
+                        throw new Error('Server returned non-JSON response');
+                      }
+                      const json = await res.json();
+                      if (!json.success) throw new Error(json.message || 'Delete failed');
+                      await fetchDocuments();
+                      toast({ title: 'File deleted' });
+                      toast({
+                        title: 'Regenerate your AI Profile',
+                        description: 'To reflect recent file changes, regenerate your one-page profile from the View AI Profile dialog.'
+                      });
+                    } catch (e:any) {
+                      toast({ title: 'Delete failed', description: e?.message || 'Try again', variant: 'destructive' });
+                    }
+                  }}>Delete</Button>
                 </div>
               </Card>
             </motion.div>

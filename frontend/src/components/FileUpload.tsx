@@ -25,25 +25,45 @@ const FileUpload = ({ onUpload }: FileUploadProps) => {
     }
   }, []);
 
+  const isValidFileType = (file: File): boolean => {
+    const validTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
+    return validTypes.includes(file.type);
+  };
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
 
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const newFiles = Array.from(e.dataTransfer.files).filter(
-        file => file.type === 'application/pdf' || 
-                file.type.startsWith('image/')
-      );
-      setFiles(prev => [...prev, ...newFiles]);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const newFiles = Array.from(e.dataTransfer.files).filter(file => {
+        if (!isValidFileType(file)) {
+          alert(`File type not supported: ${file.name}. Please upload PDF, JPG, or PNG files only.`);
+          return false;
+        }
+        return true;
+      });
+      
+      if (newFiles.length > 0) {
+        setFiles(prev => [...prev, ...newFiles]);
+      }
     }
   }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     e.preventDefault();
-    if (e.target.files && e.target.files[0]) {
-      const newFiles = Array.from(e.target.files);
-      setFiles(prev => [...prev, ...newFiles]);
+    if (e.target.files && e.target.files.length > 0) {
+      const newFiles = Array.from(e.target.files).filter(file => {
+        if (!isValidFileType(file)) {
+          alert(`File type not supported: ${file.name}. Please upload PDF, JPG, or PNG files only.`);
+          return false;
+        }
+        return true;
+      });
+      
+      if (newFiles.length > 0) {
+        setFiles(prev => [...prev, ...newFiles]);
+      }
     }
   };
 
